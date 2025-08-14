@@ -76,7 +76,7 @@ end
 
 ---Get list of pending and submitted changelists
 ---@param options PerforceChangesOptions
----@param callback fun(list: PerforceChangeInfo[]|nil)
+---@param callback fun(errors: string[]|nil, list: PerforceChangeInfo[]|nil)
 function M.changes(options, callback)
 	local args = {}
 
@@ -93,9 +93,59 @@ function M.changes(options, callback)
 	})
 end
 
+---@class PerforceOpenedArgs
+---@field files string[]|nil
+---@field changelist string|nil
+---@field all_clients boolean|nil
+---@field user string|nil
+
+---@class PerforceOpenedEntry
+---@field edit string
+---@field change string
+---@field client string
+---@field clientFile string
+---@field depotFile string
+---@field haveRev string
+---@field rev string
+---@field type string
+---@field user string
+
+---@param options PerforceOpenedArgs
+---@param callback fun(errors: string[]|nil, list: PerforceOpenedEntry[]|nil)
+function M.opened(options, callback)
+	local args = {}
+
+	if options.files then
+		for _, file in ipairs(options.files) do
+			assert(not vim.startswith(file, "-"))
+			table.insert(args, file)
+		end
+	end
+
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+
+	if options.all_clients then
+		table.insert(args, "-as")
+	end
+
+	if options.user then
+		table.insert(args, "-u")
+		table.insert(args, options.user)
+	end
+
+	util.execute({
+		cmd = "opened",
+		args = args,
+		callback = callback,
+	})
+end
+
 ---alias for perforce.changes()
 ---@param options PerforceChangesOptions
----@param callback fun(list: PerforceChangeInfo[]|nil)
+---@param callback fun(errors: string[]|nil, list: PerforceChangeInfo[]|nil)
 function M.changelists(options, callback)
 	M.changes(options, callback)
 end
@@ -108,7 +158,7 @@ end
 --- @field hunks perforce.Hunk[]
 
 --- @param files string[]|string
---- @param callback fun(list: PerforceDiffInfo[]|nil)
+--- @param callback fun(errors: string[]|nil, list: PerforceDiffInfo[]|nil)
 function M.diff(files, callback)
 	local args = { "-du" }
 
@@ -126,7 +176,7 @@ function M.diff(files, callback)
 	util.execute({
 		cmd = "diff",
 		args = args,
-		callback = function(msgs)
+		callback = function(errors, msgs)
 			local result = {}
 
 			for i = 1, #msgs, 2 do
@@ -143,7 +193,7 @@ function M.diff(files, callback)
 				table.insert(result, info)
 			end
 
-			callback(result)
+			callback(errors, result)
 		end,
 	})
 end
