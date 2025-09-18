@@ -150,6 +150,32 @@ function M.changelists(options, callback)
 	M.changes(options, callback)
 end
 
+---@class PerforceWhereInfo
+---@field clientFile string
+---@field depotFile string
+---@field path string
+
+---@param files string[]
+---@param callback fun(errors: string[]|nil, list: PerforceWhereInfo[]|nil)
+function M.where(files, callback)
+	local args = {}
+
+	assert(#files > 0)
+
+	if files then
+		for _, file in ipairs(files) do
+			assert(type(file) == "string")
+			table.insert(args, file)
+		end
+	end
+
+	util.execute({
+		cmd = "where",
+		args = args,
+		callback = callback,
+	})
+end
+
 --- @class PerforceDiffInfo
 --- @field clientFile string
 --- @field depotFile string
