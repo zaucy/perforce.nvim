@@ -80,12 +80,23 @@ end
 function M.changes(options, callback)
 	local args = {}
 
+	if options.status then
+		table.insert(args, "-s")
+		table.insert(args, options.status)
+	end
+
+	if options.user then
+		table.insert(args, "-u")
+		table.insert(args, options.user)
+	end
+
 	if options.files then
 		for _, file in ipairs(options.files) do
 			assert(not vim.startswith(file, "-"))
 			table.insert(args, file)
 		end
 	end
+
 	util.execute({
 		cmd = "changes",
 		args = args,
