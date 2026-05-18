@@ -3,6 +3,13 @@ local hunk_util = require("perforce.hunk_util")
 
 local M = {}
 
+---Get the workspace root for a given path, with caching.
+---@param path string
+---@param callback fun(root: string|nil)
+function M.get_workspace_root(path, callback)
+	util.get_workspace_root(path, callback)
+end
+
 ---@class PerforceClientInfo
 ---@field Access string
 ---@field Backup string
@@ -217,21 +224,119 @@ function M.diff(files, callback)
 			local result = {}
 
 			for i = 1, #msgs, 2 do
-				local msg = msgs[i]
+				local info = msgs[i]
 				local diff_msg = msgs[i + 1]
 
-				assert(msg.clientFile ~= nil, "missing clientFile in message")
+				assert(info.clientFile ~= nil, "missing clientFile in message")
 				assert(diff_msg.data ~= nil, "missing diff msg data")
 
-				local info = vim.json.decode(msg)
-				local hunks_str = vim.json.decode(diff_msg).data
-				info.hunks = hunk_util.parse_hunks_str(hunks_str)
+				info.hunks = hunk_util.parse_hunks_str(diff_msg.data)
 
 				table.insert(result, info)
 			end
 
 			callback(errors, result)
 		end,
+	})
+end
+
+---@class PerforceFstatOptions
+---@field files string[]|string
+---@field fields string[]|nil
+
+---@class PerforceFstatEntry
+---@field clientFile string
+---@field depotFile string
+---@field headRev string
+---@field haveRev string
+---@field action string|nil
+---@field change string|nil
+---@field type string
+
+---@param options PerforceFstatOptions
+---@param callback fun(errors: string[]|nil, list: PerforceFstatEntry[]|nil)
+function M.fstat(options, callback)
+	local args = {}
+	if options.fields then
+		table.insert(args, "-T")
+		table.insert(args, table.concat(options.fields, ","))
+	end
+
+	local files = options.files
+	if type(files) == "string" then
+		files = { files }
+	end
+
+	for _, file in ipairs(files) do
+		table.insert(args, file)
+	end
+
+	util.execute({
+		cmd = "fstat",
+		args = args,
+		callback = callback,
+	})
+end
+
+---@class PerforcePrintOptions
+---@field file string
+---@field output_file string|nil
+
+---@param options PerforcePrintOptions
+---@param callback fun(errors: string[]|nil, content: string|nil)
+function M.print(options, callback)
+	local args = { "-q" }
+	if options.output_file then
+		table.insert(args, "-o")
+		table.insert(args, options.output_file)
+	end
+	table.insert(args, options.file)
+
+	util.execute({
+		cmd = "print",
+		args = args,
+		callback = function(errors, msgs)
+			if options.output_file then
+				callback(errors, nil)
+			else
+				local content = ""
+				for _, msg in ipairs(msgs) do
+					if msg.data then
+						content = content .. msg.data
+					end
+				end
+				callback(errors, content)
+			end
+		end,
+	})
+end
+
+---@class PerforceAnnotateOptions
+---@field file string
+---@field all boolean|nil
+---@field follow_branches boolean|nil
+
+---@class PerforceAnnotateEntry
+---@field upper string
+---@field lower string
+---@field data string
+
+---@param options PerforceAnnotateOptions
+---@param callback fun(errors: string[]|nil, list: PerforceAnnotateEntry[]|nil)
+function M.annotate(options, callback)
+	local args = { "-q" }
+	if options.all then
+		table.insert(args, "-a")
+	end
+	if options.follow_branches then
+		table.insert(args, "-i")
+	end
+	table.insert(args, options.file)
+
+	util.execute({
+		cmd = "annotate",
+		args = args,
+		callback = callback,
 	})
 end
 

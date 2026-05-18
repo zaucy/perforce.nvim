@@ -1,9 +1,13 @@
 local M = {}
 
+local workspace_cache = {} -- path -> { root = string|false, timestamp = number }
+local CACHE_TTL = 1000 * 60 * 5 -- 5 minutes
+
 ---@class PerforceExecuteOptions
 ---@field cmd string
 ---@field args string[]
 ---@field callback fun(errors: any[]|nil, v: any[])
+---@field cwd string|nil
 
 ---@param opts PerforceExecuteOptions
 function M.execute(opts)
@@ -22,6 +26,7 @@ function M.execute(opts)
 	vim.uv.spawn("p4", {
 		args = args,
 		stdio = { nil, stdout, stderr },
+		cwd = opts.cwd,
 	}, function(code, _)
 		local lines = vim.split(stdout_str, "\n", { trimempty = true, plain = true })
 		for _, line in ipairs(lines) do
@@ -39,6 +44,7 @@ function M.execute(opts)
 		if code == 0 then
 			opts.callback(errors, result)
 		else
+			opts.callback(errors or { "p4 exited with code " .. code }, result)
 		end
 	end)
 
@@ -52,10 +58,58 @@ function M.execute(opts)
 		if data ~= nil then
 			local lines = vim.split(data, "\n", { trimempty = true })
 			for _, line in ipairs(lines) do
-				vim.notify(line, vim.log.levels.ERROR)
+				-- Only notify if not a "not in client view" style error which is common during detection
+				if not line:match("not in client view") and not line:match("Connect to server failed") then
+					vim.notify(line, vim.log.levels.ERROR)
+				end
 			end
 		end
 	end)
+end
+
+---Get the workspace root for a given path, with caching.
+---@param path string
+---@param callback fun(root: string|nil)
+function M.get_workspace_root(path, callback)
+	path = vim.fn.fnamemodify(path, ":p")
+	if vim.fn.isdirectory(path) == 0 then
+		path = vim.fn.fnamemodify(path, ":h")
+	end
+
+	-- Check cache
+	local cached = workspace_cache[path]
+	if cached and (vim.uv.now() - cached.timestamp < CACHE_TTL) then
+		callback(cached.root or nil)
+		return
+	end
+
+	-- Check for root markers to avoid calling p4 info on non-perforce projects
+	local markers = vim.fs.find({ ".p4config", ".p4ignore", ".p4ignore.txt" }, {
+		path = path,
+		upward = true,
+		stop = vim.uv.os_homedir(),
+	})
+
+	if #markers == 0 then
+		workspace_cache[path] = { root = false, timestamp = vim.uv.now() }
+		callback(nil)
+		return
+	end
+
+	M.execute({
+		cmd = "info",
+		args = {},
+		cwd = path,
+		callback = function(errors, result)
+			local root = nil
+			if result and result[1] and result[1].clientRoot then
+				root = result[1].clientRoot
+			end
+
+			workspace_cache[path] = { root = root or false, timestamp = vim.uv.now() }
+			callback(root)
+		end,
+	})
 end
 
 return M
