@@ -41,11 +41,13 @@ function M.execute(opts)
 		if #errors == 0 then
 			errors = nil
 		end
-		if code == 0 then
-			opts.callback(errors, result)
-		else
-			opts.callback(errors or { "p4 exited with code " .. code }, result)
-		end
+		vim.schedule(function()
+			if code == 0 then
+				opts.callback(errors, result)
+			else
+				opts.callback(errors or { "p4 exited with code " .. code }, result)
+			end
+		end)
 	end)
 
 	vim.uv.read_start(stdout, function(err, data)

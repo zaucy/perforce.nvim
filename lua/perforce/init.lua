@@ -80,6 +80,9 @@ end
 ---@field user string|nil
 ---@field user_case_insensitive boolean|nil
 ---@field status string|nil
+---@field full_description boolean|nil
+---@field long_description boolean|nil
+---@field max integer|nil
 
 ---Get list of pending and submitted changelists
 ---@param options PerforceChangesOptions
@@ -87,14 +90,38 @@ end
 function M.changes(options, callback)
 	local args = {}
 
+	if options.max then
+		table.insert(args, "-m")
+		table.insert(args, tostring(options.max))
+	end
+
+	if options.full_description then
+		table.insert(args, "-l")
+	elseif options.long_description then
+		table.insert(args, "-L")
+	end
+
 	if options.status then
 		table.insert(args, "-s")
 		table.insert(args, options.status)
 	end
 
+	if options.client then
+		table.insert(args, "-c")
+		table.insert(args, options.client)
+	end
+
+	if options.client_case_insensitive then
+		table.insert(args, "--client-case-insensitive")
+	end
+
 	if options.user then
 		table.insert(args, "-u")
 		table.insert(args, options.user)
+	end
+
+	if options.user_case_insensitive then
+		table.insert(args, "--user-case-insensitive")
 	end
 
 	if options.files then
@@ -108,6 +135,47 @@ function M.changes(options, callback)
 		cmd = "changes",
 		args = args,
 		callback = callback,
+	})
+end
+
+---Get detailed information about a changelist, including its files
+---@param changelist string|number
+---@param callback fun(errors: string[]|nil, result: table|nil)
+function M.describe(changelist, callback)
+	util.execute({
+		cmd = "describe",
+		args = { "-s", tostring(changelist) },
+		callback = function(err, result)
+			if err then
+				callback(err, nil)
+				return
+			end
+			if not result or #result == 0 then
+				callback(nil, nil)
+				return
+			end
+			local raw = result[1]
+			local files = {}
+			local i = 0
+			while raw["depotFile" .. i] do
+				table.insert(files, {
+					depotFile = raw["depotFile" .. i],
+					action = raw["action" .. i],
+					type = raw["type" .. i],
+					rev = raw["rev" .. i],
+				})
+				i = i + 1
+			end
+			callback(nil, {
+				change = raw.change,
+				user = raw.user,
+				client = raw.client,
+				time = raw.time,
+				status = raw.status,
+				desc = raw.desc,
+				files = files,
+			})
+		end,
 	})
 end
 
@@ -166,6 +234,117 @@ end
 ---@param callback fun(errors: string[]|nil, list: PerforceChangeInfo[]|nil)
 function M.changelists(options, callback)
 	M.changes(options, callback)
+end
+
+---@class PerforceReopenOptions
+---@field changelist string
+---@field files string[]
+---@field filetype string|nil
+
+---Move opened files to another changelist or change their filetype
+---@param options PerforceReopenOptions
+---@param callback fun(errors: string[]|nil, result: any[]|nil)
+function M.reopen(options, callback)
+	local args = {}
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+	if options.filetype then
+		table.insert(args, "-t")
+		table.insert(args, options.filetype)
+	end
+	assert(options.files and #options.files > 0, "must provide at least one file to reopen")
+	for _, file in ipairs(options.files) do
+		assert(not vim.startswith(file, "-"))
+		table.insert(args, file)
+	end
+
+	util.execute({
+		cmd = "reopen",
+		args = args,
+		callback = callback,
+	})
+end
+
+---@class PerforceEditOptions
+---@field files string[]
+---@field changelist string|nil
+---@field filetype string|nil
+
+---Open existing files for edit
+---@param options PerforceEditOptions
+---@param callback fun(errors: string[]|nil, result: any[]|nil)
+function M.edit(options, callback)
+	local args = {}
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+	if options.filetype then
+		table.insert(args, "-t")
+		table.insert(args, options.filetype)
+	end
+	assert(options.files and #options.files > 0, "must provide at least one file to edit")
+	for _, file in ipairs(options.files) do
+		assert(not vim.startswith(file, "-"))
+		table.insert(args, file)
+	end
+
+	util.execute({
+		cmd = "edit",
+		args = args,
+		callback = callback,
+	})
+end
+
+---@class PerforceAddOptions
+---@field files string[]
+---@field changelist string|nil
+---@field filetype string|nil
+
+---Open new files for add
+---@param options PerforceAddOptions
+---@param callback fun(errors: string[]|nil, result: any[]|nil)
+function M.add(options, callback)
+	local args = {}
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+	if options.filetype then
+		table.insert(args, "-t")
+		table.insert(args, options.filetype)
+	end
+	assert(options.files and #options.files > 0, "must provide at least one file to add")
+	for _, file in ipairs(options.files) do
+		assert(not vim.startswith(file, "-"))
+		table.insert(args, file)
+	end
+
+	util.execute({
+		cmd = "add",
+		args = args,
+		callback = callback,
+	})
+end
+
+---Get Perforce server and client info
+---@param callback fun(errors: string[]|nil, info: table|nil)
+---@param cwd string|nil
+function M.info(callback, cwd)
+	util.execute({
+		cmd = "info",
+		args = {},
+		cwd = cwd,
+		callback = function(errors, result)
+			if result and result[1] then
+				callback(errors, result[1])
+			else
+				callback(errors, nil)
+			end
+		end,
+	})
 end
 
 ---@class PerforceWhereInfo
@@ -338,6 +517,65 @@ function M.annotate(options, callback)
 		args = args,
 		callback = callback,
 	})
+end
+
+---Get change specification for a changelist (p4 change -o <cl>)
+---@param changelist string|number|nil
+---@param callback? fun(errors: string[]|nil, spec: string|nil)
+---@return string[]|nil errors, string|nil spec
+function M.change_spec(changelist, callback)
+	local cmd = { "p4", "change", "-o" }
+	if changelist and changelist ~= "" and changelist ~= "new" and changelist ~= "default" then
+		table.insert(cmd, tostring(changelist))
+	end
+
+	if callback then
+		vim.system(cmd, { text = true }, function(res)
+			vim.schedule(function()
+				if res.code ~= 0 then
+					local err = res.stderr ~= "" and res.stderr or res.stdout
+					callback({ vim.trim(err or "Failed to get changelist spec") }, nil)
+				else
+					callback(nil, res.stdout)
+				end
+			end)
+		end)
+	else
+		local res = vim.system(cmd, { text = true }):wait()
+		if res.code ~= 0 then
+			local err = res.stderr ~= "" and res.stderr or res.stdout
+			return { vim.trim(err or "Failed to get changelist spec") }, nil
+		else
+			return nil, res.stdout
+		end
+	end
+end
+
+---Save change specification (p4 change -i)
+---@param spec string
+---@param callback? fun(err: string|nil, message: string|nil)
+---@return string|nil err, string|nil message
+function M.save_change_spec(spec, callback)
+	if callback then
+		vim.system({ "p4", "change", "-i" }, { stdin = spec, text = true }, function(res)
+			vim.schedule(function()
+				if res.code ~= 0 then
+					local err = res.stderr ~= "" and res.stderr or res.stdout
+					callback(vim.trim(err or "Failed to save changelist spec"), nil)
+				else
+					callback(nil, vim.trim(res.stdout))
+				end
+			end)
+		end)
+	else
+		local res = vim.system({ "p4", "change", "-i" }, { stdin = spec, text = true }):wait()
+		if res.code ~= 0 then
+			local err = res.stderr ~= "" and res.stderr or res.stdout
+			return vim.trim(err or "Failed to save changelist spec"), nil
+		else
+			return nil, vim.trim(res.stdout)
+		end
+	end
 end
 
 return M
