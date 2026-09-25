@@ -21,6 +21,40 @@ perforce.diff("file.txt", function(err, diff_info) ... end)
 
 ## Plugins
 
+### Crude Integration (`perforce.plugins.crude`)
+
+Integrates Perforce with [crude.nvim](https://github.com/zaucy/crude.nvim):
+- **Full Genuine Depot Paths**: Unlike Oil which forbids slashes in entry names and requires stripping filenames to basenames with virtual text hacks, the Crude provider renders full, native Perforce depot paths directly in the buffer (e.g. `//depot/my_project/src/main.cpp`).
+- **Action Column**: Displays Perforce file actions (`edit`, `add`, `delete`, `integrate`) with appropriate syntax highlighting (`DiffChange`, `DiffAdd`, `DiffDelete`, `Special`).
+- **Cross-Changelist Moves**: Move files between changelist buffers (e.g. cut a line with `dd` in `p4://default`, paste into `p4://12345` with `p`) and save (`:w`). Crude automatically detects the cross-buffer move and executes `p4 reopen -c 12345 <depotFile>`.
+- **Revert on Delete**: Press `dd` on a depot path and save (`:w`) to execute `p4 revert <depotFile>`. Files moved across changelist buffers are automatically recognized and will not be reverted.
+- **Rename / Move**: Edit a depot path directly and save (`:w`) to execute `p4 move`.
+- **Add / Edit**: Add a new file path to a changelist buffer and save (`:w`) to execute `p4 edit` (or fallback `p4 add`).
+- **Navigation & Inspection**:
+  - Press `<CR>` on an overview changelist to open its buffer.
+  - Press `<CR>` on a depot path to open the corresponding local workspace file (resolved via client mapping or `p4 where`), or view remote/submitted files via `p4 print`.
+  - Press `-` inside any changelist buffer to navigate up to the changelist overview (`p4://opened`).
+- **Changelist Specification Editor**: Run `:P4 change [changelist]` to view and edit changelist specifications (`p4 change -o / -i`) in a centered floating window.
+
+```lua
+local p4_crude = require("perforce.plugins.crude")
+p4_crude.setup()
+
+-- Keymaps
+vim.keymap.set("n", "<leader>po", "<cmd>P4 opened<cr>", { desc = "Perforce opened changelists" })
+vim.keymap.set("n", "<leader>pd", "<cmd>P4 default<cr>", { desc = "Perforce default changelist" })
+vim.keymap.set("n", "<leader>ph", "<cmd>P4 history<cr>", { desc = "Perforce server history" })
+vim.keymap.set("n", "<leader>pe", "<cmd>P4 change<cr>", { desc = "Perforce edit change spec" })
+```
+
+#### Commands:
+- `:P4 [opened|history|default|<cl>]` or `:CrudeP4 [...]`: Open a Crude buffer for pending changelists, history, or a specific changelist.
+- `:P4 change [changelist]`: Open changelist spec editor (`p4 change -o / -i`) for the specified changelist.
+- `:edit p4://opened`: Overview of only changelists that currently have opened files.
+- `:edit p4://history`: Overview of recent server-wide changelists.
+- `:edit p4://default`: Flat list of files in the default changelist.
+- `:edit p4://<cl>`: Flat list of files in changelist `<cl>`.
+
 ### Oil Integration (`perforce.plugins.oil`)
 
 Integrates Perforce with [oil.nvim](https://github.com/stevearc/oil.nvim):

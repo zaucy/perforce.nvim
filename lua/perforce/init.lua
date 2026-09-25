@@ -267,6 +267,62 @@ function M.reopen(options, callback)
 	})
 end
 
+---@class PerforceRevertOptions
+---@field files string[]
+---@field changelist string|nil
+---@field keep_workspace_files boolean|nil
+
+---Revert opened files
+---@param options PerforceRevertOptions
+---@param callback fun(errors: string[]|nil, result: any[]|nil)
+function M.revert(options, callback)
+	local args = {}
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+	if options.keep_workspace_files then
+		table.insert(args, "-k")
+	end
+	assert(options.files and #options.files > 0, "must provide at least one file to revert")
+	for _, file in ipairs(options.files) do
+		assert(not vim.startswith(file, "-"))
+		table.insert(args, file)
+	end
+
+	util.execute({
+		cmd = "revert",
+		args = args,
+		callback = callback,
+	})
+end
+
+---@class PerforceMoveOptions
+---@field from_file string
+---@field to_file string
+---@field changelist string|nil
+
+---Move or rename an opened file
+---@param options PerforceMoveOptions
+---@param callback fun(errors: string[]|nil, result: any[]|nil)
+function M.move(options, callback)
+	local args = {}
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+	assert(options.from_file and options.from_file ~= "", "must provide from_file")
+	assert(options.to_file and options.to_file ~= "", "must provide to_file")
+	table.insert(args, options.from_file)
+	table.insert(args, options.to_file)
+
+	util.execute({
+		cmd = "move",
+		args = args,
+		callback = callback,
+	})
+end
+
 ---@class PerforceEditOptions
 ---@field files string[]
 ---@field changelist string|nil
