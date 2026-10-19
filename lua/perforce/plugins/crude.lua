@@ -1,30 +1,84 @@
+---Perforce integration for crude.nvim. Nothing is registered automatically; wire it up yourself:
+---
+---  local crude = require("crude")
+---  local p4_crude = require("perforce.plugins.crude")
+---  crude.register_provider("perforce", p4_crude.provider)         -- or p4_crude.provider({ ... })
+---  crude.register_extension("crude-fs-p4", p4_crude.fs_signs)     -- or p4_crude.fs_signs({ ... })
 local perforce = require("perforce")
-local provider = require("perforce.plugins.crude.provider")
+local p4 = require("perforce.plugins.crude.p4")
+local url = require("perforce.plugins.crude.url")
 
 local M = {}
 
-M.provider = provider
+---crude.Provider for p4:// buffers (callable: `M.provider(opts)` creates a configured instance)
+M.provider = require("perforce.plugins.crude.provider")
 
----Open a Crude buffer for Perforce changelists
----@param changelist? string|number
-function M.open(changelist)
-	local ok_crude, crude = pcall(require, "crude")
-	assert(ok_crude, "crude.nvim is required to use perforce.plugins.crude")
+---crude.Extension for crude-fs opened-file signs (callable: `M.fs_signs(opts)` creates a configured instance)
+M.fs_signs = require("perforce.plugins.crude.fs_signs")
 
-	if changelist and tostring(changelist) ~= "" then
-		local target = tostring(changelist)
-		if not target:match("^p4://") and not target:match("^perforce://") then
-			target = "p4://" .. target
-		end
-		crude.open(target)
+M.url = url
+
+---Open a p4:// crude buffer
+---@param target? string|number "opened", "history", "pending", "default", a changelist number, or a full p4:// URL
+function M.open(target)
+	local name
+	if target == nil or tostring(target) == "" then
+		name = url.scheme
 	else
-		crude.open("p4://opened")
+		target = tostring(target)
+		name = target:match("^p4://") and target or (url.scheme .. target)
+	end
+	url.parse(name) -- validate
+	vim.cmd.edit(vim.fn.fnameescape(name))
+end
+
+---Refresh loaded, unmodified p4:// crude buffers (e.g. after a description change)
+function M.refresh_buffers()
+	local ok, crude = pcall(require, "crude")
+	if not ok then
+		return
+	end
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if
+			vim.api.nvim_buf_is_loaded(b)
+			and vim.bo[b].filetype == "crude"
+			and not vim.bo[b].modified
+			and url.try_parse(vim.api.nvim_buf_get_name(b))
+		then
+			pcall(crude.refresh_buffer, b)
+		end
 	end
 end
 
----Open a change window (centered float or split)
+---Crude entry on the cursor line of a crude buffer (nil on header lines / non-crude buffers)
+---@param bufnr? integer
+---@return crude.Entry?
+function M.cursor_entry(bufnr)
+	bufnr = (bufnr == nil or bufnr == 0) and vim.api.nvim_get_current_buf() or bufnr
+	if vim.bo[bufnr].filetype ~= "crude" then
+		return nil
+	end
+	local ok_cache, cache = pcall(require, "crude.cache")
+	local ok_diff, diff = pcall(require, "crude.diff")
+	if not ok_cache or not ok_diff then
+		return nil
+	end
+	local lnum = vim.api.nvim_win_get_cursor(0)[1]
+	local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
+	if not line or line:match("^#") then
+		return nil
+	end
+	local prov = cache.get_buf_provider(bufnr)
+	local ok, id = pcall(diff.parse_line, line, prov, bufnr)
+	local snapshot = cache.get_snapshot(bufnr)
+	return (ok and id and snapshot) and cache.lookup(snapshot, id) or nil
+end
+
+---@param buf integer
+---@param cl_str string
+---@param opts { vertical?: boolean, split?: boolean }
+---@return integer win
 local function open_change_window(buf, cl_str, opts)
-	opts = opts or {}
 	if opts.vertical then
 		vim.cmd("vsplit")
 		vim.api.nvim_win_set_buf(0, buf)
@@ -35,68 +89,65 @@ local function open_change_window(buf, cl_str, opts)
 		return vim.api.nvim_get_current_win()
 	end
 
-	-- Centered floating window
 	local editor_width = vim.o.columns
 	local editor_height = vim.o.lines - vim.o.cmdheight
 	local width = math.min(math.max(math.floor(editor_width * 0.8), 70), editor_width - 4)
 	local height = math.min(math.max(math.floor(editor_height * 0.8), 20), editor_height - 4)
-	local row = math.max(0, math.floor((editor_height - height) / 2))
-	local col = math.max(0, math.floor((editor_width - width) / 2))
-
 	local win = vim.api.nvim_open_win(buf, true, {
 		relative = "editor",
 		width = width,
 		height = height,
-		row = row,
-		col = col,
+		row = math.max(0, math.floor((editor_height - height) / 2)),
+		col = math.max(0, math.floor((editor_width - width) / 2)),
 		style = "minimal",
 		border = "rounded",
 		title = string.format(" Perforce Change: %s ", cl_str),
 		title_pos = "center",
 	})
-
 	vim.wo[win].wrap = false
 	vim.wo[win].cursorline = true
-
 	return win
 end
 
----Open a changelist specification editor buffer (p4 change -o / -i)
+---Open a changelist specification editor (`p4 change -o` / `p4 change -i`) in `p4-change://<cl>`.
+---Without a changelist, uses the current p4://<cl> buffer, or the changelist under the cursor in an overview.
 ---@param changelist? string|number
----@param opts? table Options: { vertical = boolean, split = boolean }
+---@param opts? { vertical?: boolean, split?: boolean } default: centered float
 function M.open_change(changelist, opts)
 	opts = opts or {}
 
 	if not changelist or tostring(changelist) == "" then
-		local bufname = vim.api.nvim_buf_get_name(0)
-		local info = provider.parse_url(bufname)
-		if info.changelist and info.changelist ~= "opened" and info.changelist ~= "history" then
-			changelist = info.changelist
+		local cur = url.try_parse(vim.api.nvim_buf_get_name(0))
+		if cur and cur.kind == "changelist" then
+			changelist = cur.changelist
+		elseif cur then
+			local entry = M.cursor_entry(0)
+			if entry and entry.meta and entry.meta.changelist then
+				changelist = entry.meta.changelist
+			end
 		end
 	end
 
 	local cl_str = (changelist and tostring(changelist) ~= "") and tostring(changelist) or "default"
-	local bufname = string.format("p4://change/%s", cl_str)
+	local bufname = "p4-change://" .. cl_str
 
-	local existing_buf = vim.fn.bufnr(bufname)
-	if existing_buf ~= -1 and vim.api.nvim_buf_is_valid(existing_buf) then
+	local existing = vim.fn.bufnr(bufname)
+	if existing ~= -1 and vim.api.nvim_buf_is_valid(existing) then
 		for _, win in ipairs(vim.api.nvim_list_wins()) do
-			if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == existing_buf then
+			if vim.api.nvim_win_get_buf(win) == existing then
 				vim.api.nvim_set_current_win(win)
 				return
 			end
 		end
-		open_change_window(existing_buf, cl_str, opts)
+		open_change_window(existing, cl_str, opts)
 		return
 	end
 
 	perforce.change_spec(cl_str, function(err, spec)
 		if err then
-			local msg = type(err) == "table" and table.concat(err, "\n") or tostring(err)
-			vim.notify("[perforce] " .. msg, vim.log.levels.ERROR)
+			vim.notify("[perforce] " .. (type(err) == "table" and table.concat(err, "\n") or tostring(err)), vim.log.levels.ERROR)
 			return
 		end
-
 		if not spec or spec == "" then
 			vim.notify("[perforce] Empty change specification returned for " .. cl_str, vim.log.levels.WARN)
 			return
@@ -106,13 +157,11 @@ function M.open_change(changelist, opts)
 		pcall(vim.api.nvim_buf_set_name, buf, bufname)
 		vim.bo[buf].buftype = "acwrite"
 		vim.bo[buf].filetype = "perforce"
-
-		local lines = vim.split(spec, "\n")
+		local lines = vim.split(spec, "\r?\n")
 		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 		vim.bo[buf].modified = false
 
 		local win = open_change_window(buf, cl_str, opts)
-
 		for lnum, line in ipairs(lines) do
 			if line:match("^Description:") then
 				vim.api.nvim_win_set_cursor(win, { math.min(lnum + 1, #lines), 0 })
@@ -121,101 +170,34 @@ function M.open_change(changelist, opts)
 		end
 
 		vim.keymap.set("n", "q", function()
-			if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified then
-				local choice = vim.fn.confirm("Discard changelist edits?", "&Yes\n&No", 2)
-				if choice == 1 then
-					pcall(vim.api.nvim_win_close, 0, true)
-				end
-			else
-				pcall(vim.api.nvim_win_close, 0, true)
+			if vim.bo[buf].modified and vim.fn.confirm("Discard changelist edits?", "&Yes\n&No", 2) ~= 1 then
+				return
 			end
-		end, { buffer = buf, desc = "Close changelist spec floating window" })
+			pcall(vim.api.nvim_win_close, 0, true)
+		end, { buffer = buf, desc = "Close changelist spec" })
 
 		vim.api.nvim_create_autocmd("BufWriteCmd", {
 			buffer = buf,
 			callback = function()
-				if not vim.api.nvim_buf_is_valid(buf) or not vim.bo[buf].modified then
+				if not vim.bo[buf].modified then
 					return
 				end
 				local content = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
 				perforce.save_change_spec(content, function(save_err, msg)
 					if save_err then
 						vim.notify("[perforce] Failed to save change spec: " .. tostring(save_err), vim.log.levels.ERROR)
-					else
-						vim.bo[buf].modified = false
-						vim.notify("[perforce] " .. (msg or "Change spec saved"), vim.log.levels.INFO)
+						return
 					end
+					if vim.api.nvim_buf_is_valid(buf) then
+						vim.bo[buf].modified = false
+					end
+					vim.notify("[perforce] " .. (msg or "Change spec saved"), vim.log.levels.INFO)
+					p4.emit_opened_changed({ changelist = cl_str })
+					M.refresh_buffers()
 				end)
 			end,
 		})
 	end)
-end
-
----Setup crude.nvim integration for Perforce
----@param opts? table
-function M.setup(opts)
-	M.config = opts or {}
-
-	-- Register provider with crude if available
-	local ok_crude, crude = pcall(require, "crude")
-	if ok_crude then
-		crude.register_provider("perforce", {
-			patterns = { "p4://*", "perforce://*" },
-			columns = provider.columns,
-			list = provider.list,
-			apply = provider.apply,
-			validate_entry_name = provider.validate_entry_name,
-			render_entry = provider.render_entry,
-			on_select = provider.on_select,
-			on_parent = provider.on_parent,
-		})
-	end
-
-	-- Perforce change spec syntax
-	vim.api.nvim_create_autocmd("FileType", {
-		pattern = "perforce",
-		callback = function(ev)
-			vim.bo[ev.buf].commentstring = "# %s"
-			vim.cmd([[
-				syntax match p4Comment "^#.*$"
-				syntax match p4Header "^[A-Za-z]\+:"
-				highlight default link p4Comment Comment
-				highlight default link p4Header Keyword
-			]])
-		end,
-	})
-
-	-- User commands
-	local function create_p4_command(cmd_name)
-		vim.api.nvim_create_user_command(cmd_name, function(cmd_opts)
-			local arg = cmd_opts.args ~= "" and cmd_opts.args or nil
-			if arg and arg:match("^change%s*(.*)$") then
-				local target = arg:match("^change%s+(.*)$")
-				M.open_change(target)
-			else
-				M.open(arg)
-			end
-		end, {
-			nargs = "?",
-			desc = "Open Crude buffer or edit change spec for Perforce changelists",
-			complete = function(arg_lead)
-				local candidates = { "opened", "history", "change", "default" }
-				if arg_lead == "" then
-					return candidates
-				end
-				local matches = {}
-				for _, cand in ipairs(candidates) do
-					if vim.startswith(cand, arg_lead) then
-						table.insert(matches, cand)
-					end
-				end
-				return matches
-			end,
-		})
-	end
-
-	create_p4_command("P4")
-	create_p4_command("CrudeP4")
 end
 
 return M

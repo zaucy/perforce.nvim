@@ -184,6 +184,7 @@ end
 ---@field changelist string|nil
 ---@field all_clients boolean|nil
 ---@field user string|nil
+---@field cwd string|nil Run p4 from this directory (resolves P4CONFIG for that workspace)
 
 ---@class PerforceOpenedEntry
 ---@field edit string
@@ -225,6 +226,7 @@ function M.opened(options, callback)
 	util.execute({
 		cmd = "opened",
 		args = args,
+		cwd = options.cwd,
 		callback = callback,
 	})
 end
@@ -478,6 +480,8 @@ end
 ---@class PerforceFstatOptions
 ---@field files string[]|string
 ---@field fields string[]|nil
+---@field opened_only boolean|nil Only report files opened in the current client (-Ro)
+---@field cwd string|nil Run p4 from this directory (resolves P4CONFIG for that workspace)
 
 ---@class PerforceFstatEntry
 ---@field clientFile string
@@ -492,6 +496,9 @@ end
 ---@param callback fun(errors: string[]|nil, list: PerforceFstatEntry[]|nil)
 function M.fstat(options, callback)
 	local args = {}
+	if options.opened_only then
+		table.insert(args, "-Ro")
+	end
 	if options.fields then
 		table.insert(args, "-T")
 		table.insert(args, table.concat(options.fields, ","))
@@ -509,6 +516,7 @@ function M.fstat(options, callback)
 	util.execute({
 		cmd = "fstat",
 		args = args,
+		cwd = options.cwd,
 		callback = callback,
 	})
 end

@@ -19,6 +19,7 @@ local helper = require("test_helper")
 
 -- Load test specs
 require("crude_provider_spec")
+require("crude_fs_signs_spec")
 
 -- Run tests and exit with code
 local exit_code = helper.run_all()
