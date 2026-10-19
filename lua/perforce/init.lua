@@ -184,6 +184,7 @@ end
 ---@field changelist string|nil
 ---@field all_clients boolean|nil
 ---@field user string|nil
+---@field cwd string|nil Run p4 from this directory (resolves P4CONFIG for that workspace)
 
 ---@class PerforceOpenedEntry
 ---@field edit string
@@ -225,6 +226,7 @@ function M.opened(options, callback)
 	util.execute({
 		cmd = "opened",
 		args = args,
+		cwd = options.cwd,
 		callback = callback,
 	})
 end
@@ -262,6 +264,62 @@ function M.reopen(options, callback)
 
 	util.execute({
 		cmd = "reopen",
+		args = args,
+		callback = callback,
+	})
+end
+
+---@class PerforceRevertOptions
+---@field files string[]
+---@field changelist string|nil
+---@field keep_workspace_files boolean|nil
+
+---Revert opened files
+---@param options PerforceRevertOptions
+---@param callback fun(errors: string[]|nil, result: any[]|nil)
+function M.revert(options, callback)
+	local args = {}
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+	if options.keep_workspace_files then
+		table.insert(args, "-k")
+	end
+	assert(options.files and #options.files > 0, "must provide at least one file to revert")
+	for _, file in ipairs(options.files) do
+		assert(not vim.startswith(file, "-"))
+		table.insert(args, file)
+	end
+
+	util.execute({
+		cmd = "revert",
+		args = args,
+		callback = callback,
+	})
+end
+
+---@class PerforceMoveOptions
+---@field from_file string
+---@field to_file string
+---@field changelist string|nil
+
+---Move or rename an opened file
+---@param options PerforceMoveOptions
+---@param callback fun(errors: string[]|nil, result: any[]|nil)
+function M.move(options, callback)
+	local args = {}
+	if options.changelist then
+		table.insert(args, "-c")
+		table.insert(args, options.changelist)
+	end
+	assert(options.from_file and options.from_file ~= "", "must provide from_file")
+	assert(options.to_file and options.to_file ~= "", "must provide to_file")
+	table.insert(args, options.from_file)
+	table.insert(args, options.to_file)
+
+	util.execute({
+		cmd = "move",
 		args = args,
 		callback = callback,
 	})
@@ -422,6 +480,8 @@ end
 ---@class PerforceFstatOptions
 ---@field files string[]|string
 ---@field fields string[]|nil
+---@field opened_only boolean|nil Only report files opened in the current client (-Ro)
+---@field cwd string|nil Run p4 from this directory (resolves P4CONFIG for that workspace)
 
 ---@class PerforceFstatEntry
 ---@field clientFile string
@@ -436,6 +496,9 @@ end
 ---@param callback fun(errors: string[]|nil, list: PerforceFstatEntry[]|nil)
 function M.fstat(options, callback)
 	local args = {}
+	if options.opened_only then
+		table.insert(args, "-Ro")
+	end
 	if options.fields then
 		table.insert(args, "-T")
 		table.insert(args, table.concat(options.fields, ","))
@@ -453,6 +516,7 @@ function M.fstat(options, callback)
 	util.execute({
 		cmd = "fstat",
 		args = args,
+		cwd = options.cwd,
 		callback = callback,
 	})
 end
